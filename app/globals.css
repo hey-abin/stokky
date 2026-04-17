@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply min-h-screen bg-brand-cream text-brand-ink font-body antialiased;
+  background-image:
+    radial-gradient(circle at top left, rgba(255, 176, 32, 0.18), transparent 22%),
+    radial-gradient(circle at bottom right, rgba(49, 100, 244, 0.14), transparent 26%),
+    linear-gradient(180deg, #fffef8 0%, #f4f7ff 100%);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3164f4 #d8e5ff;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #3164f4;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #d8e5ff;
+}
+
+.panel {
+  @apply rounded-3xl border border-white/70 bg-white/85 shadow-soft backdrop-blur;
+}
+
+.panel-dark {
+  @apply rounded-3xl border border-brand-ink/10 bg-brand-ink text-white shadow-soft;
+}
+
+.button-primary {
+  @apply inline-flex items-center justify-center rounded-full bg-brand-blue px-5 py-3 font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[#244fce];
+}
+
+.button-secondary {
+  @apply inline-flex items-center justify-center rounded-full border border-brand-ink/15 bg-white px-5 py-3 font-semibold text-brand-ink transition hover:-translate-y-0.5 hover:border-brand-blue hover:text-brand-blue;
+}
+
+.field {
+  @apply w-full rounded-2xl border border-brand-ink/10 bg-white px-4 py-3 text-sm text-brand-ink outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-brand-blue/15;
+}
+
+.status-pill {
+  @apply inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold;
+}
