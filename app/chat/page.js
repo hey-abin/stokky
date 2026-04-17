@@ -1,9 +1,9 @@
-import ChatShell from "@/components/chat-shell";
+import ChatSetup from "@/components/chat-setup";
 
 export const metadata = {
-  title: "Chat | stokky"
+  title: "Setup | stokky"
 };
 
 export default function ChatPage() {
-  return <ChatShell />;
+  return <ChatSetup />;
 }
