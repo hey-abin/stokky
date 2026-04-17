@@ -19,11 +19,13 @@ import { getSocket } from "@/lib/socket-client";
 const STORAGE_KEY = "stokky-profile";
 
 function buildIceServers() {
-  const servers = [];
-
-  if (process.env.NEXT_PUBLIC_STUN_URL) {
-    servers.push({ urls: process.env.NEXT_PUBLIC_STUN_URL });
-  }
+  const servers = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" }
+  ];
 
   if (process.env.NEXT_PUBLIC_TURN_URL) {
     servers.push({
@@ -36,27 +38,44 @@ function buildIceServers() {
   return servers;
 }
 
-function attachStreamToVideo(videoElement, stream, muted = false) {
-  if (!videoElement) {
-    return;
-  }
+function VideoView({ stream, muted = false, className }) {
+  const videoRef = useRef(null);
 
-  videoElement.srcObject = stream || null;
-  videoElement.muted = muted;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
 
-  if (!stream) {
-    return;
-  }
-
-  const tryPlay = () => {
-    const playPromise = videoElement.play();
-    if (playPromise?.catch) {
-      playPromise.catch(() => {});
+    console.log(`[VideoView] Attaching stream ${stream?.id} (muted: ${muted})`);
+    
+    // Using direct assignment of srcObject
+    if (video.srcObject !== stream) {
+      video.srcObject = stream || null;
     }
-  };
 
-  videoElement.onloadedmetadata = tryPlay;
-  tryPlay();
+    if (!stream) return;
+
+    const tryPlay = async () => {
+      try {
+        await video.play();
+        console.log(`[VideoView] Playing ${stream.id}`);
+      } catch (err) {
+        console.warn("[VideoView] Play prevented:", err.message);
+      }
+    };
+
+    video.onloadedmetadata = tryPlay;
+    tryPlay();
+  }, [stream, muted]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted={muted}
+      className={className}
+    />
+  );
 }
 
 export default function CallShell() {
@@ -64,13 +83,20 @@ export default function CallShell() {
   const socketRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [status, setStatus] = useState({
+    phase: "booting",
+    text: "Preparing your call room...",
+    tone: "info"
+  });
+
   const peerConnectionRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
   const roomRef = useRef(null);
   const messagesRef = useRef(null);
   const profileRef = useRef(null);
   const autoQueueRef = useRef(false);
+  const isNegotiatingRef = useRef(false);
 
   const [profile, setProfile] = useState(null);
   const [queueStats, setQueueStats] = useState({ waiting: 0 });
@@ -82,15 +108,10 @@ export default function CallShell() {
   const [connectionState, setConnectionState] = useState("waiting");
   const [localReady, setLocalReady] = useState(false);
   const [remoteReady, setRemoteReady] = useState(false);
-  const [status, setStatus] = useState({
-    phase: "booting",
-    text: "Preparing your call room...",
-    tone: "info"
-  });
 
   const sharedInterests = room?.sharedInterests || [];
   const isMatched = status.phase === "matched";
-  const remoteActive = Boolean(remoteStreamRef.current) || remoteReady;
+  const remoteActive = Boolean(remoteStream) || remoteReady;
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem(STORAGE_KEY);
@@ -116,7 +137,8 @@ export default function CallShell() {
   }, [router]);
 
   const syncLocalPreview = useCallback(() => {
-    attachStreamToVideo(localVideoRef.current, localStreamRef.current, true);
+    // No-op now as VideoView handles it via props
+    console.log("[Media] Local preview sync triggered.");
   }, []);
 
   const ensureLocalMedia = useCallback(async () => {
@@ -124,9 +146,9 @@ export default function CallShell() {
       throw new Error("media_unsupported");
     }
 
-    if (localStreamRef.current) {
+    if (localStream) {
       syncLocalPreview();
-      return localStreamRef.current;
+      return localStream;
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -134,12 +156,19 @@ export default function CallShell() {
       video: true
     });
 
-    localStreamRef.current = stream;
+    setLocalStream(stream);
     setLocalReady(true);
     setCameraEnabled(stream.getVideoTracks().every((track) => track.enabled));
     setMicEnabled(stream.getAudioTracks().every((track) => track.enabled));
     syncLocalPreview();
 
+    console.group("[Media Diagnostics]");
+    console.log("Local stream acquired.");
+    stream.getTracks().forEach(track => {
+      console.log(`- Track: ${track.kind}, Label: ${track.label}, Enabled: ${track.enabled}, ReadyState: ${track.readyState}`);
+    });
+    console.groupEnd();
+    
     return stream;
   }, [syncLocalPreview]);
 
@@ -147,33 +176,25 @@ export default function CallShell() {
     peerConnectionRef.current?.close();
     peerConnectionRef.current = null;
 
-    localStreamRef.current?.getTracks().forEach((track) => track.stop());
-    localStreamRef.current = null;
+    localStream?.getTracks().forEach((track) => track.stop());
+    setLocalStream(null);
     setLocalReady(false);
 
-    remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
-    remoteStreamRef.current = null;
+    remoteStream?.getTracks().forEach((track) => track.stop());
+    setRemoteStream(null);
     setRemoteReady(false);
 
     syncLocalPreview();
-
-    if (remoteVideoRef.current) {
-      attachStreamToVideo(remoteVideoRef.current, null, false);
-    }
-  }, [syncLocalPreview]);
+  }, [localStream, remoteStream, syncLocalPreview]);
 
   const clearRemoteMedia = useCallback(() => {
     peerConnectionRef.current?.close();
     peerConnectionRef.current = null;
 
-    remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
-    remoteStreamRef.current = null;
+    remoteStream?.getTracks().forEach((track) => track.stop());
+    setRemoteStream(null);
     setRemoteReady(false);
-
-    if (remoteVideoRef.current) {
-      attachStreamToVideo(remoteVideoRef.current, null, false);
-    }
-  }, []);
+  }, [remoteStream]);
 
   const createPeerConnection = useCallback((targetId, roomId) => {
     const socket = socketRef.current;
@@ -204,9 +225,16 @@ export default function CallShell() {
     };
 
     peer.ontrack = (event) => {
-      remoteStreamRef.current = event.streams[0];
+      console.log("[WebRTC] Remote stream received", event.streams[0]?.id);
+      setRemoteStream(event.streams[0]);
       setRemoteReady(true);
-      attachStreamToVideo(remoteVideoRef.current, event.streams[0], false);
+    };
+
+    peer.oniceconnectionstatechange = () => {
+      console.log("ICE Connection State:", peer.iceConnectionState);
+      if (peer.iceConnectionState === "failed" || peer.iceConnectionState === "disconnected") {
+        setRemoteReady(false);
+      }
     };
 
     peerConnectionRef.current = peer;
@@ -214,6 +242,9 @@ export default function CallShell() {
   }, [room?.stranger?.nickname]);
 
   const setupMediaConnection = useCallback(async (shouldInitiate, targetId, roomId) => {
+    if (isNegotiatingRef.current) return;
+    isNegotiatingRef.current = true;
+
     try {
       const stream = await ensureLocalMedia();
       const peer = createPeerConnection(targetId, roomId);
@@ -226,6 +257,7 @@ export default function CallShell() {
       });
 
       if (shouldInitiate) {
+        console.log("Initiating WebRTC offer");
         const offer = await peer.createOffer();
         await peer.setLocalDescription(offer);
         socketRef.current.emit("webrtc:signal", {
@@ -234,12 +266,15 @@ export default function CallShell() {
           data: offer
         });
       }
-    } catch (_error) {
+    } catch (error) {
+      console.error("WebRTC setup error:", error);
       setStatus({
         phase: "searching",
         text: "Camera or microphone access is blocked. Allow access to use live video.",
         tone: "warn"
       });
+    } finally {
+      isNegotiatingRef.current = false;
     }
   }, [createPeerConnection, ensureLocalMedia]);
 
@@ -359,6 +394,7 @@ export default function CallShell() {
     };
 
     const handleMessage = (payload) => {
+      console.log("[Chat] Message received:", payload.text);
       setMessages((current) => {
         const deduped = current.filter((message) => {
           const sameSender = message.senderId === payload.senderId;
@@ -377,20 +413,29 @@ export default function CallShell() {
       }
 
       const peer = peerConnectionRef.current;
+      if (!peer) return;
 
-      if (data.type === "offer") {
-        await peer.setRemoteDescription(new RTCSessionDescription(data));
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        socket.emit("webrtc:signal", {
-          roomId,
-          targetId: senderId,
-          data: answer
-        });
-      } else if (data.type === "answer") {
-        await peer.setRemoteDescription(new RTCSessionDescription(data));
-      } else if (data.candidate) {
-        await peer.addIceCandidate(new RTCIceCandidate(data));
+      try {
+        if (data.type === "offer") {
+          console.log("Received WebRTC offer");
+          await peer.setRemoteDescription(new RTCSessionDescription(data));
+          const answer = await peer.createAnswer();
+          await peer.setLocalDescription(answer);
+          socketRef.current.emit("webrtc:signal", {
+            roomId,
+            targetId: senderId,
+            data: answer
+          });
+        } else if (data.type === "answer") {
+          console.log("Received WebRTC answer");
+          await peer.setRemoteDescription(new RTCSessionDescription(data));
+        } else if (data.candidate) {
+          if (peer.remoteDescription) {
+            await peer.addIceCandidate(new RTCIceCandidate(data));
+          }
+        }
+      } catch (error) {
+        console.error("Signaling error:", error);
       }
     };
 
@@ -440,12 +485,17 @@ export default function CallShell() {
   }, [messages]);
 
   useEffect(() => {
-    syncLocalPreview();
-  }, [localReady, syncLocalPreview]);
+    if (localReady && localStream) {
+      console.log("[Media] Syncing local preview due to localReady change.");
+      syncLocalPreview();
+    }
+  }, [localReady, localStream, syncLocalPreview]);
 
   useEffect(() => {
-    attachStreamToVideo(remoteVideoRef.current, remoteStreamRef.current, false);
-  }, [remoteReady]);
+    if (remoteReady && remoteStream) {
+      console.log("[Media] Remote state is ready.");
+    }
+  }, [remoteReady, remoteStream]);
 
   useEffect(() => () => {
     releaseAllMedia();
@@ -491,6 +541,8 @@ export default function CallShell() {
 
     setMessages((current) => [...current, optimisticMessage]);
 
+    console.log("[Chat] Sending message:", trimmed);
+
     socketRef.current.emit("chat:send", {
       roomId: room.roomId,
       text: trimmed,
@@ -518,6 +570,11 @@ export default function CallShell() {
 
   return (
     <main className="min-h-screen bg-[#08111f] text-white">
+      {typeof window !== "undefined" && !window.isSecureContext && (
+        <div className="bg-rose-500 py-3 text-center text-sm font-bold text-white transition-all">
+          ⚠️ Insecure Connection: Your camera and microphone will be blocked. Use localhost or https.
+        </div>
+      )}
       <section className="hidden min-h-screen lg:grid lg:grid-cols-[0.95fr_1.05fr]">
         <aside className="flex min-h-screen flex-col border-r border-white/10 bg-[#0c1628]">
           <div className="border-b border-white/10 px-6 py-5">
@@ -635,11 +692,18 @@ export default function CallShell() {
           <DesktopVideoPanel
             title="Your camera"
             subtitle={cameraEnabled ? "Live preview ready" : "Camera is off"}
-            videoRef={localVideoRef}
+            stream={localStream}
             active={localReady}
             muted
             overlay={
               <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => ensureLocalMedia()}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-amber/20 bg-brand-amber/10 px-4 py-2 text-sm font-semibold text-brand-amber transition hover:bg-brand-amber/20"
+                >
+                  Reload
+                </button>
                 <ControlButton
                   icon={cameraEnabled ? Camera : CameraOff}
                   label={cameraEnabled ? "Camera on" : "Camera off"}
@@ -658,7 +722,7 @@ export default function CallShell() {
           <DesktopVideoPanel
             title={room?.stranger?.nickname || "Stranger"}
             subtitle={isMatched ? "Remote live stream" : "Waiting for a match"}
-            videoRef={remoteVideoRef}
+            stream={remoteStream}
             active={remoteActive}
             placeholder={isMatched ? "Connecting remote video..." : "We will place the other person's video here."}
           />
@@ -667,7 +731,7 @@ export default function CallShell() {
 
       <section className="relative min-h-screen lg:hidden">
         <div className="absolute inset-0 bg-black">
-          <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-cover" />
+          <VideoView stream={remoteStream} className="h-full w-full object-cover" />
           {!remoteActive ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-[radial-gradient(circle_at_top,rgba(49,100,244,0.3),transparent_32%),linear-gradient(180deg,#132850_0%,#050a13_100%)] px-8 text-center">
               <div className="mb-5 rounded-full bg-white/10 p-4">
@@ -710,7 +774,7 @@ export default function CallShell() {
           </div>
 
           <div className="pointer-events-none absolute right-4 top-24 w-28 overflow-hidden rounded-[24px] border border-white/15 bg-black/40 shadow-2xl backdrop-blur">
-            <video ref={localVideoRef} autoPlay playsInline muted className="aspect-[3/4] w-full object-cover" />
+            <VideoView stream={localStream} muted className="aspect-[3/4] w-full object-cover -scale-x-100" />
             {!localReady ? (
               <div className="absolute inset-0 flex items-center justify-center p-3 text-center text-[11px] text-white/70">
                 You
@@ -815,7 +879,7 @@ function connectionLabel(state) {
   return state;
 }
 
-function DesktopVideoPanel({ title, subtitle, videoRef, active, muted = false, placeholder, overlay }) {
+function DesktopVideoPanel({ title, subtitle, stream, active, muted = false, placeholder, overlay }) {
   return (
     <div className="relative border-b border-white/10 p-5 last:border-b-0">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(49,100,244,0.22),transparent_28%)]" />
@@ -828,7 +892,11 @@ function DesktopVideoPanel({ title, subtitle, videoRef, active, muted = false, p
           {overlay}
         </div>
         <div className="relative flex-1 overflow-hidden rounded-[34px] border border-white/10 bg-black/40">
-          <video ref={videoRef} autoPlay playsInline muted={muted} className="h-full w-full object-cover" />
+          <VideoView
+            stream={stream}
+            muted={muted}
+            className={clsx("h-full w-full object-cover", title === "Your camera" && "-scale-x-100")}
+          />
           {!active ? (
             <div className="absolute inset-0 flex items-center justify-center p-8 text-center text-sm leading-7 text-white/55">
               {placeholder}

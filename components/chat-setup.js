@@ -39,7 +39,7 @@ export default function ChatSetup() {
     [form.interests]
   );
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
 
     const nickname = form.nickname.trim();
@@ -52,6 +52,38 @@ export default function ChatSetup() {
 
     if (!interests.length) {
       setError("Add at least one keyword so stokky can find a better match.");
+      return;
+    }
+
+    // High-visibility check for Secure Context
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setError("Insecure Connection Detected: Browsers block camera/mic access on non-localhost HTTP sites. Please use an HTTPS ngrok link or localhost.");
+      return;
+    }
+
+    setError("Requesting camera and microphone access...");
+    
+    try {
+      // Check if mediaDevices is supported (only available in Secure Contexts)
+      if (!navigator.mediaDevices) {
+        throw new Error("mediaDevices_not_supported");
+      }
+
+      // Force the browser to ask for permission
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: true 
+      });
+      
+      // Stop the stream immediately, it was just to check/prompt for permission
+      stream.getTracks().forEach(track => track.stop());
+    } catch (err) {
+      console.error("Media permission error:", err);
+      if (err.message === "mediaDevices_not_supported") {
+        setError("Your browser context is not secure. Please use 'localhost' or '127.0.0.1' to access the chat.");
+      } else {
+        setError("Camera and microphone access is required to enter the chat room. Please enable them in your browser settings.");
+      }
       return;
     }
 
