@@ -36,6 +36,29 @@ function buildIceServers() {
   return servers;
 }
 
+function attachStreamToVideo(videoElement, stream, muted = false) {
+  if (!videoElement) {
+    return;
+  }
+
+  videoElement.srcObject = stream || null;
+  videoElement.muted = muted;
+
+  if (!stream) {
+    return;
+  }
+
+  const tryPlay = () => {
+    const playPromise = videoElement.play();
+    if (playPromise?.catch) {
+      playPromise.catch(() => {});
+    }
+  };
+
+  videoElement.onloadedmetadata = tryPlay;
+  tryPlay();
+}
+
 export default function CallShell() {
   const router = useRouter();
   const socketRef = useRef(null);
@@ -57,6 +80,7 @@ export default function CallShell() {
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [micEnabled, setMicEnabled] = useState(true);
   const [connectionState, setConnectionState] = useState("waiting");
+  const [localReady, setLocalReady] = useState(false);
   const [remoteReady, setRemoteReady] = useState(false);
   const [status, setStatus] = useState({
     phase: "booting",
@@ -92,9 +116,7 @@ export default function CallShell() {
   }, [router]);
 
   const syncLocalPreview = useCallback(() => {
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current || null;
-    }
+    attachStreamToVideo(localVideoRef.current, localStreamRef.current, true);
   }, []);
 
   const ensureLocalMedia = useCallback(async () => {
@@ -113,6 +135,7 @@ export default function CallShell() {
     });
 
     localStreamRef.current = stream;
+    setLocalReady(true);
     setCameraEnabled(stream.getVideoTracks().every((track) => track.enabled));
     setMicEnabled(stream.getAudioTracks().every((track) => track.enabled));
     syncLocalPreview();
@@ -126,6 +149,7 @@ export default function CallShell() {
 
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
+    setLocalReady(false);
 
     remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
     remoteStreamRef.current = null;
@@ -134,7 +158,7 @@ export default function CallShell() {
     syncLocalPreview();
 
     if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
+      attachStreamToVideo(remoteVideoRef.current, null, false);
     }
   }, [syncLocalPreview]);
 
@@ -147,7 +171,7 @@ export default function CallShell() {
     setRemoteReady(false);
 
     if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
+      attachStreamToVideo(remoteVideoRef.current, null, false);
     }
   }, []);
 
@@ -182,10 +206,7 @@ export default function CallShell() {
     peer.ontrack = (event) => {
       remoteStreamRef.current = event.streams[0];
       setRemoteReady(true);
-
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-      }
+      attachStreamToVideo(remoteVideoRef.current, event.streams[0], false);
     };
 
     peerConnectionRef.current = peer;
@@ -338,7 +359,16 @@ export default function CallShell() {
     };
 
     const handleMessage = (payload) => {
-      setMessages((current) => [...current, payload]);
+      setMessages((current) => {
+        const deduped = current.filter((message) => {
+          const sameSender = message.senderId === payload.senderId;
+          const sameText = message.text === payload.text;
+          const optimistic = String(message.id || "").startsWith("local-");
+          return !(optimistic && sameSender && sameText);
+        });
+
+        return [...deduped, payload];
+      });
     };
 
     const handleSignal = async ({ senderId, data, roomId }) => {
@@ -409,6 +439,14 @@ export default function CallShell() {
     container.scrollTop = container.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    syncLocalPreview();
+  }, [localReady, syncLocalPreview]);
+
+  useEffect(() => {
+    attachStreamToVideo(remoteVideoRef.current, remoteStreamRef.current, false);
+  }, [remoteReady]);
+
   useEffect(() => () => {
     releaseAllMedia();
   }, [releaseAllMedia]);
@@ -442,6 +480,16 @@ export default function CallShell() {
     if (!trimmed || !room?.roomId) {
       return;
     }
+
+    const optimisticMessage = {
+      id: `local-${Date.now()}`,
+      senderId: socketRef.current?.id,
+      senderLabel: profile?.nickname || "You",
+      text: trimmed,
+      createdAt: new Date().toISOString()
+    };
+
+    setMessages((current) => [...current, optimisticMessage]);
 
     socketRef.current.emit("chat:send", {
       roomId: room.roomId,
@@ -588,7 +636,7 @@ export default function CallShell() {
             title="Your camera"
             subtitle={cameraEnabled ? "Live preview ready" : "Camera is off"}
             videoRef={localVideoRef}
-            active={Boolean(localStreamRef.current)}
+            active={localReady}
             muted
             overlay={
               <div className="flex gap-2">
@@ -663,14 +711,14 @@ export default function CallShell() {
 
           <div className="pointer-events-none absolute right-4 top-24 w-28 overflow-hidden rounded-[24px] border border-white/15 bg-black/40 shadow-2xl backdrop-blur">
             <video ref={localVideoRef} autoPlay playsInline muted className="aspect-[3/4] w-full object-cover" />
-            {!localStreamRef.current ? (
+            {!localReady ? (
               <div className="absolute inset-0 flex items-center justify-center p-3 text-center text-[11px] text-white/70">
                 You
               </div>
             ) : null}
           </div>
 
-          <div className="mt-auto px-4 pb-4">
+          <div className="mt-auto px-4 pb-8">
             <div
               ref={messagesRef}
               className="mb-3 max-h-56 space-y-2 overflow-y-auto rounded-[28px] border border-white/10 bg-black/28 p-3 backdrop-blur"
